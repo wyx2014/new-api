@@ -1,4 +1,4 @@
-﻿version: '3.4'
+version: '3.4'
 
 services:
   new-api:
@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     image: new-api:local
     container_name: new-api
-    restart: always
+    restart: "no"
     command: --log-dir /app/logs
     ports:
       - 5175:3000
@@ -28,7 +28,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: new-api-redis
-    restart: always
+    restart: "no"
     command: redis-server --requirepass 123456
     volumes:
       - redis_data:/data
@@ -36,7 +36,7 @@ services:
   postgres:
     image: postgres:15-alpine
     container_name: new-api-pg
-    restart: always
+    restart: "no"
     environment:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: 123456

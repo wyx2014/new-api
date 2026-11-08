@@ -308,6 +308,14 @@ func AddToken(c *gin.Context) {
 		common.ApiErrorT(c, "Token name is too long")
 		return
 	}
+	token.Name = strings.TrimSpace(token.Name)
+	if token.Name != "" {
+		var duplicateCount int64
+		if err := model.DB.Model(&model.Token{}).Where("name = ?", token.Name).Count(&duplicateCount).Error; err == nil && duplicateCount > 0 {
+			common.ApiErrorT(c, "Token name already exists")
+			return
+		}
+	}
 	if len(token.ApikeyName) > 128 {
 		common.ApiErrorT(c, "Token name is too long")
 		return
@@ -423,6 +431,14 @@ func UpdateToken(c *gin.Context) {
 	if len(token.Name) > 50 {
 		common.ApiErrorT(c, "Token name is too long")
 		return
+	}
+	token.Name = strings.TrimSpace(token.Name)
+	if token.Name != "" {
+		var duplicateCount int64
+		if err := model.DB.Model(&model.Token{}).Where("name = ? AND id != ?", token.Name, token.Id).Count(&duplicateCount).Error; err == nil && duplicateCount > 0 {
+			common.ApiErrorT(c, "Token name already exists")
+			return
+		}
 	}
 	if len(token.ApikeyName) > 128 {
 		common.ApiErrorT(c, "Token name is too long")
