@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import axios, { type AxiosRequestConfig } from 'axios'
 import { t } from 'i18next'
 
+import { appPath, MODEL_GATEWAY_PREFIX } from '@/lib/app-path'
 import {
   applyAuthRotation,
   clearAuthentication,
@@ -47,7 +48,7 @@ declare module 'axios' {
 export type ApiRequestConfig = AxiosRequestConfig
 
 export const api = axios.create({
-  baseURL: '',
+  baseURL: MODEL_GATEWAY_PREFIX,
   withCredentials: true,
   headers: {
     // no-store forbids storage; no-cache also revalidates any older cached response.
@@ -77,9 +78,9 @@ api.get = ((url: string, config: ApiRequestConfig = {}) => {
 function redirectToSignIn(): void {
   if (
     typeof window !== 'undefined' &&
-    window.location.pathname !== '/sign-in'
+    window.location.pathname !== appPath('/sign-in')
   ) {
-    window.location.replace('/sign-in')
+    window.location.replace(appPath('/sign-in'))
   }
 }
 

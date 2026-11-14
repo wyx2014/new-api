@@ -6,6 +6,8 @@ import { pluginReact } from '@rsbuild/plugin-react'
 import { pluginTailwindcss } from '@rsbuild/plugin-tailwindcss'
 import { tanstackRouter } from '@tanstack/router-plugin/rspack'
 
+import { MODEL_GATEWAY_PREFIX } from './src/lib/app-path'
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig(({ envMode }) => {
@@ -17,8 +19,8 @@ export default defineConfig(({ envMode }) => {
 
   const isProd = envMode === 'production'
   const devProxy = Object.fromEntries(
-    (['/api', '/v1', '/mj', '/pg', '/mcp'] as const).map((key) => [
-      key,
+    (['/api', '/v1', '/v1beta', '/mj', '/pg', '/mcp'] as const).map((key) => [
+      `${MODEL_GATEWAY_PREFIX}${key}`,
       { target: serverUrl, changeOrigin: true },
     ])
   ) as Record<string, { target: string; changeOrigin: boolean }>
@@ -67,12 +69,14 @@ export default defineConfig(({ envMode }) => {
       favicon: './public/favicon.ico',
     },
     server: {
+      base: `${MODEL_GATEWAY_PREFIX}/`,
       host: '0.0.0.0',
       port: 5175,
       strictPort: false,
       proxy: devProxy,
     },
     output: {
+      assetPrefix: `${MODEL_GATEWAY_PREFIX}/`,
       // Production optimizations
       minify: isProd,
       target: 'web',

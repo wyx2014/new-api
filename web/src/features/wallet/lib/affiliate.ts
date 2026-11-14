@@ -23,7 +23,9 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Generate affiliate registration link
  */
+import { appUrl } from '@/lib/dom-utils'
+
 export function generateAffiliateLink(affCode: string): string {
   if (typeof window === 'undefined') return ''
-  return `${window.location.origin}/sign-up?aff=${affCode}`
+  return `${appUrl('/sign-up')}?aff=${affCode}`
 }

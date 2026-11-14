@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"github.com/QuantumNous/new-api/common"
 	"net/http"
 	"strconv"
 
@@ -78,7 +79,7 @@ func GetMyMCPServers(c *gin.Context) {
 			Name:         s.Name,
 			DisplayName:  s.DisplayName,
 			Description:  s.Description,
-			ProxyURL:     "/mcp/" + s.Name + "/sse",
+			ProxyURL:     common.ModelGatewayPrefix + "/mcp/" + s.Name + "/sse",
 			QuotaPerCall: s.QuotaPerCall,
 		})
 	}

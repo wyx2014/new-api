@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { SystemStatus } from '@/features/auth/types'
+import { appUrl } from '@/lib/dom-utils'
 
 // ============================================================================
 // OAuth URL Builders
@@ -49,10 +50,7 @@ export function buildGitHubOAuthUrl(clientId: string, state: string): string {
 export function buildDiscordOAuthUrl(clientId: string, state: string): string {
   const url = new URL('https://discord.com/oauth2/authorize')
   url.searchParams.set('client_id', clientId)
-  url.searchParams.set(
-    'redirect_uri',
-    `${window.location.origin}/oauth/discord`
-  )
+  url.searchParams.set('redirect_uri', appUrl('/oauth/discord'))
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('scope', 'identify+openid')
   url.searchParams.set('state', state)
@@ -69,7 +67,7 @@ export function buildOIDCOAuthUrl(
 ): string {
   const url = new URL(authUrl)
   url.searchParams.set('client_id', clientId)
-  url.searchParams.set('redirect_uri', `${window.location.origin}/oauth/oidc`)
+  url.searchParams.set('redirect_uri', appUrl('/oauth/oidc'))
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('scope', 'openid profile email')
   url.searchParams.set('state', state)
@@ -120,10 +118,7 @@ export function buildOAuthAuthorizationUrl(
       if (custom) {
         const url = new URL(custom.authorization_endpoint)
         url.searchParams.set('client_id', custom.client_id)
-        url.searchParams.set(
-          'redirect_uri',
-          `${window.location.origin}/oauth/${provider}`
-        )
+        url.searchParams.set('redirect_uri', appUrl(`/oauth/${provider}`))
         url.searchParams.set('response_type', 'code')
         url.searchParams.set('state', state)
         if (custom.scopes) url.searchParams.set('scope', custom.scopes)

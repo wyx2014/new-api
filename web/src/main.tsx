@@ -21,6 +21,7 @@ import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 
+import { MODEL_GATEWAY_PREFIX } from '@/lib/app-path'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import { applyFaviconToDom } from '@/lib/dom-utils'
 import '@/lib/dayjs'
@@ -49,6 +50,7 @@ const queryClient = createAppQueryClient(() => {
 
 // Create a new router instance
 const router = createRouter({
+  basepath: MODEL_GATEWAY_PREFIX,
   routeTree,
   context: { queryClient },
   defaultPreload: 'intent',

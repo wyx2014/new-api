@@ -43,6 +43,7 @@ var DefaultLanguage string
 var SessionCookieTrustedURLs []string
 
 const (
+	ModelGatewayPrefix                      = "/modelgw"
 	DefaultUserSessionActiveLimit           = 50
 	DefaultUserSessionIssuanceLimit         = 100
 	DefaultUserSessionIssuanceWindowSeconds = 24 * 60 * 60

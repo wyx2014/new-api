@@ -1,6 +1,8 @@
 package system_setting
 
-var ServerAddress = "http://localhost:3000"
+import "github.com/QuantumNous/new-api/common"
+
+var ServerAddress = "http://localhost:3000" + common.ModelGatewayPrefix
 var TaskPublicAddress = ""
 var WorkerUrl = ""
 var WorkerValidKey = ""

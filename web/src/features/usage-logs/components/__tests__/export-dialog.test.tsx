@@ -204,7 +204,7 @@ it('downloads the streamed logs of the current filters as CSV', async () => {
   await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1))
   const [url] = fetchSpy.mock.calls[0]
   const params = new URL(String(url), 'http://localhost').searchParams
-  expect(String(url)).toMatch(/^\/api\/log\/self\/export\?/)
+  expect(String(url)).toMatch(/^\/modelgw\/api\/log\/self\/export\?/)
   expect(params.get('model_name')).toBe('gpt-4o')
   expect(params.get('start_timestamp')).toBe(
     String(Math.floor(range.startTime / 1000))

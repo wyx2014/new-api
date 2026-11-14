@@ -16,6 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { appPath } from './app-path'
+
+export function appUrl(path = ''): string {
+  return `${window.location.origin}${appPath(path)}`
+}
+
 export function applyFaviconToDom(url: string) {
   if (typeof document === 'undefined' || !url) return
   try {

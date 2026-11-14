@@ -21,8 +21,10 @@ For commercial licensing, please contact support@quantumnous.com
  */
 
 // System Configuration Defaults
+import { appPath } from '@/lib/app-path'
+
 export const DEFAULT_SYSTEM_NAME = 'New API'
-export const DEFAULT_LOGO = '/logo.png'
+export const DEFAULT_LOGO = appPath('/logo.png')
 
 // LocalStorage Keys
 export const STORAGE_KEYS = {

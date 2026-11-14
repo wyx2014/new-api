@@ -67,6 +67,34 @@ func TestAuthLogoutRejectsRefreshCookieSessionMismatch(t *testing.T) {
 	}
 }
 
+func TestGatewayCookiesAreScopedAndClearedAtExternalPaths(t *testing.T) {
+	previousSecure := common.SessionCookieSecure
+	common.SessionCookieSecure = true
+	t.Cleanup(func() { common.SessionCookieSecure = previousSecure })
+	issued := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(issued)
+	service.WriteRefreshCookie(context, "invalid-test-token")
+	cookies := issued.Result().Cookies()
+	require.Len(t, cookies, 2)
+	assert.Equal(t, common.ModelGatewayPrefix+"/api/user/auth", cookies[0].Path)
+	assert.True(t, cookies[0].HttpOnly)
+	assert.True(t, cookies[0].Secure)
+	assert.Equal(t, http.SameSiteStrictMode, cookies[0].SameSite)
+	assert.Equal(t, common.ModelGatewayPrefix+"/", cookies[1].Path)
+	assert.False(t, cookies[1].HttpOnly)
+	cleared := httptest.NewRecorder()
+	context, _ = gin.CreateTestContext(cleared)
+	service.ClearRefreshCookie(context)
+	removed := cleared.Result().Cookies()
+	require.Len(t, removed, len(cookies))
+	for index, cookie := range removed {
+		assert.Equal(t, cookies[index].Name, cookie.Name)
+		assert.Equal(t, cookies[index].Path, cookie.Path)
+		assert.Equal(t, -1, cookie.MaxAge)
+		assert.Empty(t, cookie.Value)
+	}
+}
+
 func TestWriteAuthSessionErrorMapsSessionGrowthLimits(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []struct {

@@ -28,6 +28,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { getUserModels } from '@/lib/api'
+import { appUrl } from '@/lib/dom-utils'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 const APP_CONFIGS = {
@@ -65,7 +66,7 @@ function getServerAddress(): string {
   } catch {
     /* empty */
   }
-  return window.location.origin
+  return appUrl()
 }
 
 function buildCCSwitchURL(
