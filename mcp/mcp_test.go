@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -639,4 +640,419 @@ func TestMCPProxyCredentialIsolation(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, string(data), "hidden")
 	assert.NotContains(t, err.Error(), "hidden")
+}
+
+func TestMCPInspectStreamable(t *testing.T) {
+	setupTestMCPDB(t)
+	initialized := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer diagnostic-secret", r.Header.Get("Authorization"))
+		assert.Empty(t, r.Header.Get("Cookie"))
+		assert.Empty(t, r.Header.Get("X-Auth-Session"))
+		assert.Equal(t, "url-secret", r.URL.Query().Get("token"))
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var request struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		w.Header().Set("Content-Type", "application/json")
+		switch request.Method {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "fixture-session")
+			body, err := common.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"protocolVersion": "2025-03-26", "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "fixture", "version": "1"}}})
+			require.NoError(t, err)
+			_, _ = w.Write(body)
+		case "notifications/initialized":
+			assert.Equal(t, "fixture-session", r.Header.Get("Mcp-Session-Id"))
+			initialized = true
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			assert.True(t, initialized)
+			assert.Equal(t, "fixture-session", r.Header.Get("Mcp-Session-Id"))
+			body, err := common.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"tools": []any{map[string]any{"name": "search", "description": "Search documents", "inputSchema": map[string]any{"type": "object"}}}}})
+			require.NoError(t, err)
+			_, _ = w.Write(body)
+		default:
+			t.Errorf("unexpected method %s", request.Method)
+		}
+	}))
+	defer upstream.Close()
+	server := &MCPServer{Name: "inspect", DisplayName: "Inspect", BaseURL: upstream.URL + "/mcp?token=url-secret", Headers: `{"Authorization":"Bearer diagnostic-secret"}`, ProtocolType: MCPProtocolStreamableHTTP, Timeout: 1, Status: MCPServerStatusDisabled, QuotaPerCall: 500}
+	require.NoError(t, server.Insert())
+	engine := gin.New()
+	engine.POST("/servers/:id/inspect", AdminInspectMCPServer)
+	req := httptest.NewRequest("POST", "/servers/1/inspect", strings.NewReader(`{"mode":"tools"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer employee-secret")
+	req.Header.Set("Cookie", "staff=secret")
+	req.Header.Set("X-Auth-Session", "employee-session")
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"connected":true`)
+	assert.Contains(t, rec.Body.String(), `"tools_status":"complete"`)
+	assert.Contains(t, rec.Body.String(), `"name":"search"`)
+	assert.NotContains(t, rec.Body.String(), "diagnostic-secret")
+	assert.NotContains(t, rec.Body.String(), "url-secret")
+	stored, err := GetMCPServerById(server.Id)
+	require.NoError(t, err)
+	assert.Equal(t, server.Headers, stored.Headers)
+	assert.Equal(t, MCPServerStatusDisabled, stored.Status)
+}
+
+func TestMCPInspectResults(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, message string
+		connected             bool
+	}{
+		{"connection", "not_requested", "", true},
+		{"empty", "complete", "", true},
+		{"unsupported", "unsupported", "", true},
+		{"auth", "not_requested", "MCP upstream authentication failed", false},
+		{"http", "not_requested", "MCP upstream HTTP request failed", false},
+		{"invalid", "not_requested", "", false},
+		{"version", "not_requested", "", false},
+		{"missing_capabilities", "not_requested", "Invalid MCP initialization response", false},
+		{"missing_capabilities_connection", "not_requested", "Invalid MCP initialization response", false},
+		{"rpc", "failed", "MCP protocol request failed", true},
+		{"pagination", "complete", "", true},
+		{"repeat", "partial", "MCP tools pagination repeated a cursor", true},
+		{"limit", "failed", "MCP inspection response limit reached", true},
+		{"tools_limit", "partial", "MCP inspection result limit reached", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupTestMCPDB(t)
+			requests := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "DELETE" {
+					w.WriteHeader(204)
+					return
+				}
+				var req struct {
+					ID     any            `json:"id"`
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
+				}
+				require.NoError(t, common.DecodeJson(r.Body, &req))
+				w.Header().Set("Content-Type", "application/json")
+				if tc.name == "auth" {
+					w.WriteHeader(401)
+					_, _ = io.WriteString(w, "hidden-secret")
+					return
+				}
+				if tc.name == "http" {
+					w.Header().Set("Location", "https://other.invalid/?key=hidden-secret")
+					w.WriteHeader(302)
+					return
+				}
+				if tc.name == "invalid" {
+					_, _ = io.WriteString(w, `{"bad":true}`)
+					return
+				}
+				var result any
+				switch req.Method {
+				case "initialize":
+					version := "2025-03-26"
+					if tc.name == "version" {
+						version = "2099-01-01"
+					}
+					caps := map[string]any{}
+					if tc.name != "unsupported" {
+						caps["tools"] = map[string]any{}
+					}
+					result = map[string]any{"protocolVersion": version, "serverInfo": map[string]string{"name": "fixture", "version": "1"}, "capabilities": caps}
+					if strings.HasPrefix(tc.name, "missing_capabilities") {
+						delete(result.(map[string]any), "capabilities")
+					}
+				case "notifications/initialized":
+					w.WriteHeader(202)
+					return
+				case "notifications/cancelled":
+					w.WriteHeader(202)
+					return
+				case "tools/list":
+					requests++
+					if tc.name == "rpc" {
+						raw, err := common.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "error": map[string]any{"code": -32603, "message": "hidden-secret"}})
+						require.NoError(t, err)
+						_, _ = w.Write(raw)
+						return
+					}
+					if tc.name == "limit" {
+						_, _ = io.WriteString(w, strings.Repeat(" ", mcpInspectMaxBytes+1))
+						return
+					}
+					tools := []any{}
+					if tc.name == "pagination" || tc.name == "repeat" || tc.name == "tools_limit" {
+						count := 1
+						if tc.name == "tools_limit" {
+							count = mcpInspectMaxTools + 1
+						}
+						for range count {
+							tools = append(tools, map[string]any{"name": "search", "description": "hidden-secret", "inputSchema": map[string]any{"type": "object", "description": "hidden-secret"}})
+						}
+					}
+					result = map[string]any{"tools": tools}
+					if (tc.name == "pagination" && requests == 1) || tc.name == "repeat" {
+						result.(map[string]any)["nextCursor"] = "page2"
+					}
+					if tc.name == "pagination" && requests == 2 {
+						assert.Equal(t, "page2", req.Params["cursor"])
+					}
+				default:
+					t.Errorf("unexpected method %s", req.Method)
+				}
+				raw, err := common.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+				require.NoError(t, err)
+				_, _ = w.Write(raw)
+			}))
+			defer upstream.Close()
+			server := &MCPServer{Name: "results", DisplayName: "Results", BaseURL: upstream.URL, Headers: `{"X-Api-Key":"hidden-secret"}`, ProtocolType: MCPProtocolStreamableHTTP, Timeout: 1}
+			require.NoError(t, server.Insert())
+			mode := "tools"
+			if tc.name == "connection" || tc.name == "missing_capabilities_connection" {
+				mode = "connection"
+			}
+			engine := gin.New()
+			engine.POST("/servers/:id/inspect", AdminInspectMCPServer)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/servers/1/inspect", strings.NewReader(`{"mode":"`+mode+`"}`))
+			req.Header.Set("Content-Type", "application/json")
+			// A hanging invalid response must be bounded by the caller's cancellation too.
+			ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+			defer cancel()
+			engine.ServeHTTP(rec, req.WithContext(ctx))
+			var envelope struct {
+				Success bool             `json:"success"`
+				Data    MCPInspectResult `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &envelope))
+			require.True(t, envelope.Success)
+			assert.Equal(t, tc.connected, envelope.Data.Connected)
+			assert.Equal(t, tc.status, envelope.Data.ToolsStatus)
+			assert.NotContains(t, rec.Body.String(), "hidden-secret")
+			if tc.message != "" {
+				require.NotNil(t, envelope.Data.Error)
+				assert.Equal(t, tc.message, envelope.Data.Error.Message)
+			}
+			if tc.name == "rpc" {
+				require.NotNil(t, envelope.Data.Error.RPCCode)
+				assert.EqualValues(t, -32603, *envelope.Data.Error.RPCCode)
+				assert.Equal(t, "tools", envelope.Data.Stage)
+			}
+			if tc.name == "pagination" {
+				assert.Len(t, envelope.Data.Tools, 2)
+				assert.True(t, envelope.Data.Complete)
+			}
+			if tc.name == "connection" || tc.name == "unsupported" {
+				assert.Zero(t, requests)
+			}
+		})
+	}
+}
+
+func TestMCPInspectSSE(t *testing.T) {
+	setupTestMCPDB(t)
+	messages := make(chan string, 4)
+	ended := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "upstream-secret", r.Header.Get("X-Api-Key"))
+		assert.Equal(t, "url-secret", r.URL.Query().Get("token"))
+		if r.Method == "GET" {
+			assert.Equal(t, "/sse", r.URL.Path)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: endpoint\ndata: /messages?session=fixture\n\n")
+			w.(http.Flusher).Flush()
+			defer close(ended)
+			for {
+				select {
+				case message := <-messages:
+					_, _ = io.WriteString(w, "event: message\ndata: "+message+"\n\n")
+					w.(http.Flusher).Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}
+		assert.Equal(t, "/messages", r.URL.Path)
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		require.NoError(t, common.DecodeJson(r.Body, &req))
+		if req.Method == "notifications/initialized" {
+			w.WriteHeader(202)
+			return
+		}
+		var result any
+		if req.Method == "initialize" {
+			result = map[string]any{"protocolVersion": "2024-11-05", "serverInfo": map[string]string{"name": "sse-fixture", "version": "1"}, "capabilities": map[string]any{"tools": map[string]any{}}}
+		} else {
+			assert.Equal(t, "tools/list", req.Method)
+			result = map[string]any{"tools": []any{}}
+		}
+		raw, err := common.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+		require.NoError(t, err)
+		messages <- string(raw)
+		w.WriteHeader(202)
+	}))
+	defer upstream.Close()
+	server := &MCPServer{Name: "sse_inspect", DisplayName: "SSE", BaseURL: upstream.URL + "/sse?token=url-secret", Headers: `{"X-Api-Key":"upstream-secret"}`, ProtocolType: MCPProtocolSSE, Timeout: 1}
+	require.NoError(t, server.Insert())
+	engine := gin.New()
+	engine.POST("/servers/:id/inspect", AdminInspectMCPServer)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/servers/1/inspect", strings.NewReader(`{"mode":"tools"}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(rec, req)
+	assert.Contains(t, rec.Body.String(), `"connected":true`)
+	assert.Contains(t, rec.Body.String(), `"tools_status":"complete"`)
+	select {
+	case <-ended:
+	case <-time.After(time.Second):
+		t.Fatal("SSE connection not cleaned up")
+	}
+}
+
+func TestMCPInspectAccessAndValidation(t *testing.T) {
+	setupTestMCPDB(t)
+	engine := gin.New()
+	engine.POST("/inspect/:id", middleware.AdminAuth(), AdminInspectMCPServer)
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, httptest.NewRequest("POST", "/inspect/1", strings.NewReader(`{"mode":"tools"}`)))
+	assert.NotEqual(t, http.StatusOK, rec.Code)
+	engine = gin.New()
+	engine.POST("/inspect/:id", AdminInspectMCPServer)
+	for _, tc := range []struct{ path, body string }{{"/inspect/0", `{"mode":"tools"}`}, {"/inspect/1", `{"mode":"execute"}`}, {"/inspect/1", `{"mode":"tools"}`}} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(rec, req)
+		assert.Contains(t, rec.Body.String(), `"success":false`)
+	}
+}
+
+func TestMCPInspectStreamableEventResponse(t *testing.T) {
+	setupTestMCPDB(t)
+	canceled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		require.NoError(t, common.DecodeJson(r.Body, &request))
+		if request.Method == "notifications/initialized" {
+			w.WriteHeader(202)
+			return
+		}
+		var result any
+		if request.Method == "initialize" {
+			result = map[string]any{"protocolVersion": "2025-03-26", "serverInfo": map[string]string{"name": "events", "version": "1"}, "capabilities": map[string]any{"tools": map[string]any{}}}
+		} else {
+			result = map[string]any{"tools": []any{}}
+		}
+		raw, err := common.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message\ndata: "+string(raw)+"\n\n")
+		w.(http.Flusher).Flush()
+		if request.Method == "tools/list" {
+			<-r.Context().Done()
+			close(canceled)
+		}
+	}))
+	defer upstream.Close()
+	server := &MCPServer{Name: "events", DisplayName: "Events", BaseURL: upstream.URL, ProtocolType: MCPProtocolStreamableHTTP, Timeout: 1}
+	require.NoError(t, server.Insert())
+	engine := gin.New()
+	engine.POST("/inspect/:id", AdminInspectMCPServer)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/inspect/1", strings.NewReader(`{"mode":"tools"}`))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(rec, req)
+	assert.Contains(t, rec.Body.String(), `"tools_status":"complete"`)
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("response SSE body leaked")
+	}
+}
+
+func TestMCPInspectCancelAndEndpointIsolation(t *testing.T) {
+	for _, kind := range []string{"headers", "result", "id", "cross-origin"} {
+		t.Run(kind, func(t *testing.T) {
+			setupTestMCPDB(t)
+			started := make(chan struct{})
+			ended := make(chan struct{})
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "DELETE" {
+					w.WriteHeader(204)
+					return
+				}
+				if kind == "cross-origin" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, "event: endpoint\ndata: http://other.invalid/messages?token=secret\n\n")
+					w.(http.Flusher).Flush()
+					<-r.Context().Done()
+					return
+				}
+				_, _ = io.Copy(io.Discard, r.Body)
+				close(started)
+				defer close(ended)
+				if kind != "headers" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(200)
+					if kind == "id" {
+						_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":999,"result":{"protocolVersion":"2025-03-26","serverInfo":{"name":"wrong","version":"1"},"capabilities":{}}}`)
+					}
+					w.(http.Flusher).Flush()
+				}
+				<-r.Context().Done()
+			}))
+			defer upstream.Close()
+			defer upstream.CloseClientConnections()
+			protocol := MCPProtocolStreamableHTTP
+			if kind == "cross-origin" {
+				protocol = MCPProtocolSSE
+			}
+			server := &MCPServer{Name: "cancel", DisplayName: "Cancel", BaseURL: upstream.URL, ProtocolType: protocol, Timeout: 1}
+			require.NoError(t, server.Insert())
+			engine := gin.New()
+			engine.POST("/inspect/:id", AdminInspectMCPServer)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if kind == "id" {
+				var release context.CancelFunc
+				ctx, release = context.WithTimeout(ctx, 100*time.Millisecond)
+				defer release()
+			}
+			req := httptest.NewRequest("POST", "/inspect/1", strings.NewReader(`{"mode":"tools"}`)).WithContext(ctx)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() { engine.ServeHTTP(rec, req); close(done) }()
+			if kind == "headers" || kind == "result" {
+				<-started
+				cancel()
+			}
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("inspection did not stop")
+			}
+			assert.Contains(t, rec.Body.String(), `"connected":false`)
+			assert.NotContains(t, rec.Body.String(), "secret")
+			if kind != "cross-origin" {
+				select {
+				case <-ended:
+				case <-time.After(time.Second):
+					t.Fatal("upstream did not cancel")
+				}
+			}
+		})
+	}
 }
