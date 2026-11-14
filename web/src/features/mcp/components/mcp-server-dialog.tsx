@@ -36,26 +36,50 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { createMCPServer, updateMCPServer } from '../api'
+import {
+  buildMCPHeaders,
+  parseMCPHeaders,
+  MCP_DEFAULT_TIMEOUT,
+  MCP_MAX_TIMEOUT,
+} from '../headers'
 import type { MCPServer } from '../types'
+import { MCPHeadersEditor } from './mcp-headers-editor'
 
 const mcpServerSchema = z.object({
   name: z
     .string()
     .min(1, 'Name is required')
-    .regex(/^[a-zA-Z0-9_-]+$/, 'Identifier must contain only letters, numbers, hyphens, and underscores'),
+    .regex(
+      /^[a-zA-Z0-9_-]+$/,
+      'Identifier must contain only letters, numbers, hyphens, and underscores'
+    ),
   display_name: z.string().min(1, 'Display name is required'),
   base_url: z
     .string()
     .min(1, 'Base URL is required')
     .url('Must be a valid URL (e.g. http://192.168.1.100:8000)'),
-  quota_per_call: z.coerce.number().min(0, 'Quota per call must be 0 or greater'),
+  quota_per_call: z.coerce
+    .number()
+    .min(0, 'Quota per call must be 0 or greater'),
   description: z.string().optional().default(''),
   status: z.number().default(1),
+  protocol_type: z.enum(['sse', 'streamableHttp']),
+  timeout: z.coerce.number().int().min(1).max(MCP_MAX_TIMEOUT),
+  headers_input: z.string().refine((value) => {
+    try {
+      parseMCPHeaders(value)
+      return true
+    } catch {
+      return false
+    }
+  }, 'Invalid MCP headers'),
+  retained_headers: z.array(z.string()),
 })
 
 type MCPServerFormValues = z.infer<typeof mcpServerSchema>
@@ -75,7 +99,12 @@ export function MCPServerDialog({
   const queryClient = useQueryClient()
   const isEditing = !!server
 
-  const form = useForm<MCPServerFormValues>({
+  const form = useForm<
+    z.input<typeof mcpServerSchema>,
+    unknown,
+    MCPServerFormValues
+  >({
+    mode: 'onChange',
     resolver: zodResolver(mcpServerSchema),
     defaultValues: {
       name: '',
@@ -84,6 +113,10 @@ export function MCPServerDialog({
       quota_per_call: 0,
       description: '',
       status: 1,
+      protocol_type: 'sse',
+      timeout: MCP_DEFAULT_TIMEOUT,
+      headers_input: '',
+      retained_headers: [],
     },
   })
 
@@ -95,7 +128,13 @@ export function MCPServerDialog({
         base_url: server.base_url,
         quota_per_call: server.quota_per_call ?? 0,
         description: server.description ?? '',
-        status: server.status ?? 1,
+        status: server.status,
+        protocol_type: server.protocol_type,
+        timeout: server.timeout,
+        headers_input: '',
+        retained_headers: Object.keys(
+          JSON.parse(server.headers) as Record<string, null>
+        ),
       })
     } else {
       form.reset({
@@ -105,19 +144,30 @@ export function MCPServerDialog({
         quota_per_call: 0,
         description: '',
         status: 1,
+        protocol_type: 'sse',
+        timeout: MCP_DEFAULT_TIMEOUT,
+        headers_input: '',
+        retained_headers: [],
       })
     }
   }, [server, form, open])
 
   const mutation = useMutation({
     mutationFn: async (values: MCPServerFormValues) => {
+      const { headers_input, retained_headers, ...fields } = values
+      const payload = {
+        ...fields,
+        headers: buildMCPHeaders(retained_headers, headers_input),
+      }
       if (isEditing && server) {
+        const { base_url, ...updates } = payload
         return updateMCPServer({
-          ...server,
-          ...values,
+          ...updates,
+          id: server.id,
+          ...(base_url === server.base_url ? {} : { base_url }),
         })
       }
-      return createMCPServer(values)
+      return createMCPServer(payload)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-servers'] })
@@ -163,7 +213,9 @@ export function MCPServerDialog({
                   />
                 </FormControl>
                 <FormDescription>
-                  {t('Unique English identifier used in gateway URL /mcp/:name/*')}
+                  {t(
+                    'Unique identifier used in gateway URL /modelgw/mcp/:name'
+                  )}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -177,7 +229,10 @@ export function MCPServerDialog({
               <FormItem>
                 <FormLabel>{t('Display Name')}</FormLabel>
                 <FormControl>
-                  <Input {...field} placeholder='e.g. Internal Knowledge Base' />
+                  <Input
+                    {...field}
+                    placeholder='e.g. Internal Knowledge Base'
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -191,14 +246,82 @@ export function MCPServerDialog({
               <FormItem>
                 <FormLabel>{t('Upstream Base URL')}</FormLabel>
                 <FormControl>
+                  <Input {...field} placeholder='http://192.168.1.100:8000' />
+                </FormControl>
+                <FormDescription>
+                  {t('Full upstream MCP endpoint; no /sse suffix is added.')}
+                  {server?.has_url_query && (
+                    <span>
+                      {t(
+                        'Saved URL query is hidden and retained when the URL is unchanged.'
+                      )}
+                    </span>
+                  )}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='protocol_type'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('MCP protocol')}</FormLabel>
+                <FormControl>
+                  <NativeSelect {...field}>
+                    <NativeSelectOption value='sse'>SSE</NativeSelectOption>
+                    <NativeSelectOption value='streamableHttp'>
+                      Streamable HTTP
+                    </NativeSelectOption>
+                  </NativeSelect>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='timeout'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Response header timeout (seconds)')}</FormLabel>
+                <FormControl>
                   <Input
                     {...field}
-                    placeholder='http://192.168.1.100:8000'
+                    value={field.value as number}
+                    type='number'
+                    min={1}
+                    max={MCP_MAX_TIMEOUT}
                   />
                 </FormControl>
                 <FormDescription>
-                  {t('The intranet service address of the MCP server')}
+                  {t(
+                    'Limits waiting for upstream headers, not the lifetime of an active stream.'
+                  )}
                 </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name='headers_input'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Upstream headers')}</FormLabel>
+                <FormControl>
+                  <MCPHeadersEditor
+                    {...field}
+                    retained={form.watch('retained_headers')}
+                    onRetainedChange={(names) =>
+                      form.setValue('retained_headers', names, {
+                        shouldDirty: true,
+                      })
+                    }
+                  />
+                </FormControl>
                 <FormMessage />
               </FormItem>
             )}
@@ -215,6 +338,7 @@ export function MCPServerDialog({
                     type='number'
                     min={0}
                     {...field}
+                    value={field.value as number}
                     placeholder='0'
                   />
                 </FormControl>
@@ -235,7 +359,9 @@ export function MCPServerDialog({
                 <FormControl>
                   <Textarea
                     {...field}
-                    placeholder={t('Brief description of what tools this MCP server provides')}
+                    placeholder={t(
+                      'Brief description of what tools this MCP server provides'
+                    )}
                     rows={2}
                   />
                 </FormControl>
@@ -252,13 +378,17 @@ export function MCPServerDialog({
                 <div className='space-y-0.5'>
                   <FormLabel>{t('Enabled')}</FormLabel>
                   <FormDescription>
-                    {t('Whether this MCP server is available for incoming traffic')}
+                    {t(
+                      'Whether this MCP server is available for incoming traffic'
+                    )}
                   </FormDescription>
                 </div>
                 <FormControl>
                   <Switch
                     checked={field.value === 1}
-                    onCheckedChange={(checked) => field.onChange(checked ? 1 : 2)}
+                    onCheckedChange={(checked) =>
+                      field.onChange(checked ? 1 : 2)
+                    }
                   />
                 </FormControl>
               </FormItem>

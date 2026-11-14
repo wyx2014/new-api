@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type MCPServer struct {
@@ -15,17 +16,23 @@ type MCPServer struct {
 	DisplayName  string         `json:"display_name" gorm:"type:varchar(128);not null"`    // 显示名称
 	Description  string         `json:"description" gorm:"type:text"`                      // 描述说明
 	BaseURL      string         `json:"base_url" gorm:"type:varchar(512);not null"`        // 内网真实目标基础地址
-	Headers      string         `json:"headers" gorm:"type:text"`                          // 上游鉴权与自定义请求头 (JSON 格式)
-	Status       int            `json:"status" gorm:"type:int;default:1;index"`            // 1: 启用, 2: 停用
-	QuotaPerCall int            `json:"quota_per_call" gorm:"type:int;default:0"`          // 单次调用扣减额度，0 表示免费
+	Headers      string         `json:"-" gorm:"type:text"`                                // Never serialize stored upstream credentials.
+	ProtocolType string         `json:"protocol_type" gorm:"type:varchar(32);default:sse"`
+	Timeout      int            `json:"timeout" gorm:"default:60"`
+	Status       int            `json:"status" gorm:"type:int;default:1;index"`   // 1: 启用, 2: 停用
+	QuotaPerCall int            `json:"quota_per_call" gorm:"type:int;default:0"` // 单次调用扣减额度，0 表示免费
 	CreatedAt    int64          `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt    int64          `json:"updated_at" gorm:"autoUpdateTime"`
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 const (
-	MCPServerStatusEnabled  = 1
-	MCPServerStatusDisabled = 2
+	MCPServerStatusEnabled    = 1
+	MCPServerStatusDisabled   = 2
+	MCPProtocolSSE            = "sse"
+	MCPProtocolStreamableHTTP = "streamableHttp"
+	DefaultMCPTimeout         = 60
+	MaxMCPTimeout             = 86400
 )
 
 type MCPRole struct {
@@ -58,7 +65,8 @@ func (server *MCPServer) Insert() error {
 	if count > 0 {
 		return errors.New("MCP server with the same name already exists")
 	}
-	return model.DB.Create(server).Error
+	// Credentials must stay out of SQL logs, including DEBUG mode.
+	return model.DB.Session(&gorm.Session{Logger: model.DB.Logger.LogMode(logger.Silent)}).Create(server).Error
 }
 
 func (server *MCPServer) Update() error {
@@ -67,7 +75,7 @@ func (server *MCPServer) Update() error {
 	if count > 0 {
 		return errors.New("MCP server with the same name already exists")
 	}
-	return model.DB.Model(server).Select("name", "display_name", "description", "base_url", "status", "quota_per_call").Updates(server).Error
+	return model.DB.Session(&gorm.Session{Logger: model.DB.Logger.LogMode(logger.Silent)}).Model(server).Select("name", "display_name", "description", "base_url", "headers", "protocol_type", "timeout", "status", "quota_per_call").Updates(server).Error
 }
 
 func DeleteMCPServerById(id int) error {

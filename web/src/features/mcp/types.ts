@@ -23,6 +23,10 @@ export interface MCPServer {
   display_name: string
   description?: string
   base_url: string
+  has_url_query: boolean
+  headers: string // Saved header names with null values; credentials are never returned.
+  protocol_type: 'sse' | 'streamableHttp'
+  timeout: number
   quota_per_call: number
   status: number // 1: enabled, 2: disabled
   created_at: number
@@ -45,5 +49,6 @@ export interface MCPAvailableItem {
   display_name: string
   description: string
   proxy_url: string
+  protocol_type: 'sse' | 'streamableHttp'
   quota_per_call: number
 }

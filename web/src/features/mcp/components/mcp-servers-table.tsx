@@ -42,6 +42,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { toIntlLocale } from '@/i18n/languages'
+import { appPath } from '@/lib/app-path'
+import { formatNumber } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { deleteMCPServer, listMCPServers } from '../api'
@@ -49,7 +52,7 @@ import type { MCPServer } from '../types'
 import { MCPServerDialog } from './mcp-server-dialog'
 
 export function MCPServersTable() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -82,7 +85,9 @@ export function MCPServersTable() {
     return (
       <EmptyState
         title={t('No MCP Servers Found')}
-        description={t('Register your first enterprise MCP server to get started.')}
+        description={t(
+          'Register your first enterprise MCP server to get started.'
+        )}
       />
     )
   }
@@ -98,6 +103,8 @@ export function MCPServersTable() {
               <TableHead>{t('Display Name')}</TableHead>
               <TableHead>{t('Upstream Base URL')}</TableHead>
               <TableHead>{t('Gateway Proxy Endpoint')}</TableHead>
+              <TableHead>{t('MCP protocol')}</TableHead>
+              <TableHead>{t('Response header timeout (seconds)')}</TableHead>
               <TableHead className='w-32'>{t('Quota / Call')}</TableHead>
               <TableHead className='w-24'>{t('Status')}</TableHead>
               <TableHead className='w-20 text-right'>{t('Actions')}</TableHead>
@@ -105,39 +112,51 @@ export function MCPServersTable() {
           </TableHeader>
           <TableBody>
             {servers.map((server) => {
-              const proxyPath = `/mcp/${server.name}/sse`
+              const proxyPath = appPath(`/mcp/${server.name}`)
               return (
                 <TableRow key={server.id}>
-                  <TableCell className='font-mono text-xs text-muted-foreground'>
+                  <TableCell className='text-muted-foreground font-mono text-xs'>
                     {server.id}
                   </TableCell>
                   <TableCell>
                     <div className='flex items-center gap-1.5'>
-                      <span className='font-mono font-medium'>{server.name}</span>
+                      <span className='font-mono font-medium'>
+                        {server.name}
+                      </span>
                       <CopyButton value={server.name} />
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className='font-medium'>{server.display_name}</div>
                     {server.description && (
-                      <div className='text-xs text-muted-foreground line-clamp-1'>
+                      <div className='text-muted-foreground line-clamp-1 text-xs'>
                         {server.description}
                       </div>
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className='flex items-center gap-1.5 font-mono text-xs text-muted-foreground'>
-                      <span className='max-w-[200px] truncate' title={server.base_url}>
+                    <div className='text-muted-foreground flex items-center gap-1.5 font-mono text-xs'>
+                      <span
+                        className='max-w-[200px] truncate'
+                        title={server.base_url}
+                      >
                         {server.base_url}
                       </span>
                       <CopyButton value={server.base_url} />
                     </div>
                   </TableCell>
                   <TableCell>
-                    <div className='flex items-center gap-1.5 font-mono text-xs text-muted-foreground'>
+                    <div className='text-muted-foreground flex items-center gap-1.5 font-mono text-xs'>
                       <span>{proxyPath}</span>
                       <CopyButton value={proxyPath} />
                     </div>
+                  </TableCell>
+                  <TableCell>{server.protocol_type}</TableCell>
+                  <TableCell>
+                    {formatNumber(
+                      server.timeout,
+                      toIntlLocale(i18n.resolvedLanguage || i18n.language)
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant='outline' className='font-mono'>
@@ -146,11 +165,17 @@ export function MCPServersTable() {
                   </TableCell>
                   <TableCell>
                     {server.status === 1 ? (
-                      <Badge variant='outline' className='border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'>
+                      <Badge
+                        variant='outline'
+                        className='border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                      >
                         {t('Enabled')}
                       </Badge>
                     ) : (
-                      <Badge variant='outline' className='border-muted text-muted-foreground'>
+                      <Badge
+                        variant='outline'
+                        className='border-muted text-muted-foreground'
+                      >
                         {t('Disabled')}
                       </Badge>
                     )}
@@ -159,7 +184,11 @@ export function MCPServersTable() {
                     <DropdownMenu>
                       <DropdownMenuTrigger
                         render={
-                          <Button variant='ghost' size='icon' className='size-8'>
+                          <Button
+                            variant='ghost'
+                            size='icon'
+                            className='size-8'
+                          >
                             <MoreHorizontal className='size-4' />
                           </Button>
                         }

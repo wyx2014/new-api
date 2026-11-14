@@ -35,6 +35,7 @@ type MCPAvailableItem struct {
 	DisplayName  string `json:"display_name"`
 	Description  string `json:"description"`
 	ProxyURL     string `json:"proxy_url"`
+	ProtocolType string `json:"protocol_type"`
 	QuotaPerCall int    `json:"quota_per_call"`
 }
 
@@ -79,7 +80,8 @@ func GetMyMCPServers(c *gin.Context) {
 			Name:         s.Name,
 			DisplayName:  s.DisplayName,
 			Description:  s.Description,
-			ProxyURL:     common.ModelGatewayPrefix + "/mcp/" + s.Name + "/sse",
+			ProxyURL:     common.ModelGatewayPrefix + "/mcp/" + s.Name,
+			ProtocolType: s.ProtocolType,
 			QuotaPerCall: s.QuotaPerCall,
 		})
 	}
@@ -106,11 +108,15 @@ func AdminGetAllMCPServers(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	views := make([]mcpServerView, 0, len(servers))
+	for _, server := range servers {
+		views = append(views, serverView(server))
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"items": servers,
+			"items": views,
 			"total": total,
 		},
 	})
@@ -127,44 +133,79 @@ func AdminGetMCPServer(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": server})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": serverView(server)})
 }
 
 func AdminCreateMCPServer(c *gin.Context) {
-	var server MCPServer
-	if err := c.ShouldBindJSON(&server); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+	var input mcpServerInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		common.ApiErrorT(c, "Invalid MCP server configuration")
 		return
 	}
-	if server.Name == "" || server.BaseURL == "" || server.DisplayName == "" {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Name, DisplayName, and BaseURL are required"})
+	server := &input.MCPServer
+	if err := server.validate(); err != nil {
+		common.ApiErrorT(c, err.Error())
 		return
 	}
-	if server.Status == 0 {
-		server.Status = MCPServerStatusEnabled
+	headers := "{}"
+	if input.Headers != nil {
+		headers = *input.Headers
 	}
+	var err error
+	server.Headers, err = mergeMCPHeaders(headers, "")
+	if err != nil {
+		common.ApiErrorT(c, err.Error())
+		return
+	}
+	server.Id = 0
 	if err := server.Insert(); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		common.ApiErrorT(c, "Failed to save MCP server")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": server})
+	common.ApiSuccessT(c, "", serverView(server))
 }
 
 func AdminUpdateMCPServer(c *gin.Context) {
-	var server MCPServer
-	if err := c.ShouldBindJSON(&server); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+	var input mcpServerInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		common.ApiErrorT(c, "Invalid MCP server configuration")
 		return
 	}
+	server := &input.MCPServer
 	if server.Id <= 0 {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Invalid server ID"})
+		common.ApiErrorT(c, "Invalid server ID")
 		return
+	}
+	previous, err := GetMCPServerById(server.Id)
+	if err != nil {
+		common.ApiErrorT(c, "MCP server not found")
+		return
+	}
+	if server.Name != previous.Name {
+		common.ApiErrorT(c, "MCP server identifier cannot be changed")
+		return
+	}
+	// Omitting the URL retains its server-only query credentials.
+	if server.BaseURL == "" {
+		server.BaseURL = previous.BaseURL
+	}
+	if err := server.validate(); err != nil {
+		common.ApiErrorT(c, err.Error())
+		return
+	}
+	server.Headers = previous.Headers
+	if input.Headers != nil {
+		server.Headers, err = mergeMCPHeaders(*input.Headers, previous.Headers)
+		if err != nil {
+			common.ApiErrorT(c, err.Error())
+			return
+		}
 	}
 	if err := server.Update(); err != nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
+		common.ApiErrorT(c, "Failed to save MCP server")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": server})
+	common.ApiSuccessT(c, "", serverView(server))
 }
 
 func AdminDeleteMCPServer(c *gin.Context) {
