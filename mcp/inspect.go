@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -166,6 +167,13 @@ func inspectMCPServer(parent context.Context, server *MCPServer, mode string) (r
 			}
 		}
 	}
+	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
+	secrets = slices.Compact(secrets)
+	replacements := make([]string, 0, 2*len(secrets))
+	for _, secret := range secrets {
+		replacements = append(replacements, secret, "[redacted]")
+	}
+	redactor := strings.NewReplacer(replacements...)
 	for range mcpInspectMaxPages {
 		page, err := session.ListTools(ctx, &sdk.ListToolsParams{Cursor: cursor})
 		if err != nil {
@@ -192,18 +200,10 @@ func inspectMCPServer(parent context.Context, server *MCPServer, mode string) (r
 				return
 			}
 			// Keep only the discovery fields needed by the UI, and redact configured credentials recursively.
-			value := MCPInspectTool{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema}
-			raw, _ := common.Marshal(value)
-			for _, secret := range secrets {
-				encoded, _ := common.Marshal(secret)
-				raw = []byte(strings.ReplaceAll(string(raw), string(encoded[1:len(encoded)-1]), "[redacted]"))
-			}
-			var safe MCPInspectTool
-			if common.Unmarshal(raw, &safe) != nil {
-				result.Error = &MCPInspectError{Message: "Invalid MCP tools response"}
-				return
-			}
-			result.Tools = append(result.Tools, safe)
+			result.Tools = append(result.Tools, MCPInspectTool{
+				Name: redactor.Replace(tool.Name), Description: redactor.Replace(tool.Description),
+				InputSchema: redactMCPInspectMetadata(tool.InputSchema, redactor),
+			})
 		}
 		if page.NextCursor == "" {
 			result.ToolsStatus = toolsComplete
@@ -222,6 +222,24 @@ func inspectMCPServer(parent context.Context, server *MCPServer, mode string) (r
 	result.ToolsStatus = toolsPartial
 	result.Error = &MCPInspectError{Message: "MCP inspection result limit reached"}
 	return
+}
+
+func redactMCPInspectMetadata(value any, redactor *strings.Replacer) any {
+	switch value := value.(type) {
+	case string:
+		return redactor.Replace(value)
+	case map[string]any:
+		redacted := make(map[string]any, len(value))
+		for key, item := range value {
+			redacted[redactor.Replace(key)] = redactMCPInspectMetadata(item, redactor)
+		}
+		return redacted
+	case []any:
+		for i, item := range value {
+			value[i] = redactMCPInspectMetadata(item, redactor)
+		}
+	}
+	return value
 }
 
 // mcpInspectTransport is the trust boundary for SDK-created HTTP requests.

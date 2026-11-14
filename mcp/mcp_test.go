@@ -642,6 +642,65 @@ func TestMCPProxyCredentialIsolation(t *testing.T) {
 	assert.NotContains(t, err.Error(), "hidden")
 }
 
+func TestMCPInspectRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		name, query, headers, description, want string
+	}{
+		{"quote", "", `{"X-Api-Key":"\""}`, "quote \" and trailing \\", "quote [redacted] and trailing \\"},
+		{"boolean", "", `{"X-Api-Key":"true"}`, "true", "[redacted]"},
+		{"overlap", "?key=abcdef", `{"X-Api-Key":"abc"}`, "abcdef abc", "[redacted] [redacted]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupTestMCPDB(t)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					ID     any    `json:"id"`
+					Method string `json:"method"`
+				}
+				require.NoError(t, common.DecodeJson(r.Body, &request))
+				w.Header().Set("Content-Type", "application/json")
+				var result any
+				switch request.Method {
+				case "initialize":
+					result = map[string]any{"protocolVersion": "2025-03-26", "serverInfo": map[string]string{"name": "redaction", "version": "1"}, "capabilities": map[string]any{"tools": map[string]any{}}}
+				case "notifications/initialized":
+					w.WriteHeader(http.StatusAccepted)
+					return
+				case "tools/list":
+					result = map[string]any{"tools": []any{map[string]any{"name": tc.description, "description": tc.description, "inputSchema": map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{tc.description: map[string]any{"enum": []any{tc.description, false, 1}}}}}}}
+				default:
+					t.Errorf("unexpected method %s", request.Method)
+				}
+				raw, err := common.Marshal(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+				require.NoError(t, err)
+				_, _ = w.Write(raw)
+			}))
+			defer upstream.Close()
+			server := &MCPServer{Name: "redaction", DisplayName: "Redaction", BaseURL: upstream.URL + tc.query, Headers: tc.headers, ProtocolType: MCPProtocolStreamableHTTP, Timeout: 1}
+			require.NoError(t, server.Insert())
+			engine := gin.New()
+			engine.POST("/inspect/:id", AdminInspectMCPServer)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/inspect/1", strings.NewReader(`{"mode":"tools"}`))
+			req.Header.Set("Content-Type", "application/json")
+			engine.ServeHTTP(rec, req)
+			var envelope struct {
+				Success bool             `json:"success"`
+				Data    MCPInspectResult `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(rec.Body.Bytes(), &envelope))
+			require.True(t, envelope.Success)
+			require.Nil(t, envelope.Data.Error)
+			require.True(t, envelope.Data.Complete)
+			require.Len(t, envelope.Data.Tools, 1)
+			tool := envelope.Data.Tools[0]
+			assert.Equal(t, tc.want, tool.Name)
+			assert.Equal(t, tc.want, tool.Description)
+			assert.Equal(t, map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{tc.want: map[string]any{"enum": []any{tc.want, false, float64(1)}}}}, tool.InputSchema)
+		})
+	}
+}
+
 func TestMCPInspectStreamable(t *testing.T) {
 	setupTestMCPDB(t)
 	initialized := false
