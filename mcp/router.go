@@ -34,6 +34,7 @@ func RegisterRoutes(router *gin.Engine) {
 			adminGroup.GET("/servers", AdminGetAllMCPServers)
 			adminGroup.GET("/servers/:id", AdminGetMCPServer)
 			adminGroup.POST("/servers", AdminCreateMCPServer)
+			adminGroup.POST("/servers/:id/inspect", AdminInspectMCPServer)
 			adminGroup.PUT("/servers", AdminUpdateMCPServer)
 			adminGroup.DELETE("/servers/:id", AdminDeleteMCPServer)
 
