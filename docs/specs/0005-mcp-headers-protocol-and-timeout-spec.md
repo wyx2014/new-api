@@ -212,7 +212,7 @@ type MCPAvailableItem struct {
 收尾：最终前端构建完成后已顺序重跑 Go 构建并通过；测试临时容器 mcp05-web、mcp05-mysql、mcp05-postgres、mcp05-build 已清理。保留的本次可执行文件约 154 MiB；日志、截图及独立 SQLite 数据合计约 1 MiB，可在不再复查时删除。本次未修改 relaykit/tokenkit 模块或共享日志数据库结构。
 
 
-## 八、补充需求：测试连接与查看工具（待实现）
+## 八、补充需求：测试连接与查看工具（已实现，未部署）
 
 ### 8.1 目标及范围
 
@@ -249,7 +249,7 @@ type MCPAvailableItem struct {
 6. 后端优先扩展现有 `mcp/mcp_test.go`，前端复用当前测试约定；完成相关测试、修改文件 lint、类型检查与构建。现有全项目类型错误须单独报告，不据此跳过本次文件检查。该补充需求的实现与验证结果另行更新，不沿用第七节结果宣称已通过。
 
 
-## 九、诊断功能实施方案（to-spec，待实施、待发布）
+## 九、诊断功能实施方案（已实现，未部署、未发布 Issue）
 
 ### 问题描述
 
@@ -307,4 +307,35 @@ type MCPAvailableItem struct {
 
 ### 其他说明
 
-当前方案仅落在本地规格中，尚未实现或发布 Issue。当前环境 gh CLI 不可用，无法完成重复项及标签检查。仓库 Issue 规则要求短事实模板并禁止直接发布实施方案，与 to-spec 的完整方案模板存在冲突；尚未获准变更该发布规则。发布时应先明确采用的正文规则，不将本地方案误报为远端已发布。
+方案制定时仅落在本地规格中，尚未实现或发布 Issue；当前实现状态见第十节。当前环境 gh CLI 不可用，无法完成重复项及标签检查。仓库 Issue 规则要求短事实模板并禁止直接发布实施方案，与 to-spec 的完整方案模板存在冲突；尚未获准变更该发布规则。发布时应先明确采用的正文规则，不将本地方案误报为远端已发布。
+
+
+## 十、诊断功能实现与验收记录（2026-11-14）
+
+本次第八、九节的后端、前端及集成验证任务均已在本地完成，集成分支为 codex/mcp-inspect。未创建或关闭远端 Issue/PR；第九节中的待实施描述为方案制定时记录，以本节实际结果为准。
+
+### 实现范围
+
+- 新增管理员 POST /modelgw/api/mcp/servers/:id/inspect，支持 connection/tools 两种模式，复用已保存配置、Header 校验及响应包装。
+- 主动握手复用官方 Go MCP SDK v1.8.0；传输按保存协议选择 SSE 或 Streamable HTTP，不增加旧入口兼容层。初始协议版本为 2025-11-25，最终结果显示实际协商版本。
+- 诊断期限 60 秒、100 页、1000 个工具、累计响应 4 MiB；处理分页、重复 cursor、部分结果、上游 HTTP/RPC 错误与会话清理。
+- 两个操作共用结果弹窗，复用 Dialog、LoadingState、ErrorState、EmptyState、Accordion、CodeBlock；支持参数展开、刷新、错误重试、取消及切换状态清理，七种语言已补齐。
+- 不新增数据库字段或迁移、不执行 tools/call、不进入代理扣费链路。保留管理员权限及同源/禁止重定向边界，不转发浏览器凭据。
+- 独立审阅发现的缺失 capabilities 校验及 JSON 文本脱敏边界已修复；递归处理字符串及键，最长秘密优先单次替换，保留 schema 布尔和数字类型。
+
+### 已执行验证
+
+- docker exec mcp-inspect-build go test ./mcp -count=1：通过。涵盖本地 SSE/Streamable HTTP 握手、会话、保存鉴权头、JSON/SSE 响应、分页/空工具/无能力、401/302、错误 RPC/ID/版本/初始化、超时/取消、同源限制、结果上限、权限及脱敏回归。
+- docker exec mcp-inspect-build go vet ./mcp：通过。
+- docker exec mcp-inspect-build go test ./middleware -run 'Auth|Session|JWT' -count=1：通过；覆盖 SDK 引入后 JWT 补丁依赖更新的关联路径。
+- web 下 bun run test -- src/features/mcp：3 个文件共 17 项通过。
+- web 下 bun x oxlint -c .oxlintrc.json src/features/mcp/api.ts src/features/mcp/types.ts src/features/mcp/components/mcp-inspect-dialog.tsx src/features/mcp/components/mcp-servers-table.tsx src/features/mcp/__tests__/inspection.test.tsx：通过。
+- web 下 bun run build：通过；随后根模块 docker exec mcp-inspect-build go build -o /build/.local-tests/mcp-inspect/new-api .：通过。
+- web 下 bun x tsc -b --pretty false：未通过，仍有 31 个既有错误，涉及未修改文件（含 mcp-role-dialog）；本次修改文件未出现新增错误。没有将全项目类型检查报告为通过。
+- IAB 浏览器在独立 5188 SQLite 站点完成：新建并保存本地上游配置 → 测试连接成功 → 查看工具/展开 inputSchema → 刷新 → 改为鉴权失败端点并保存 → 展示 401、失败阶段与重试 → 慢响应取消 → 修正端点保存后恢复成功。浏览器警告/错误日志为空。
+
+### 发布与产物
+
+本次没有更新 5175 的 new-api 容器，没有访问或迁移业务 PostgreSQL/Redis 数据。测试只连接本地可控上游，未测试真实内置服务、未发起收费调用。测试临时容器和 UI worktree 于验收后清理。
+
+可复查产物位于 .local-tests/mcp-inspect/（已忽略，不入 Git）：二进制约 154 MiB，日志、截图及独立 SQLite 测试数据约数 MiB。截图为 browser-verified.png；测试环境已结束，不再需要复查时可删除该目录。
