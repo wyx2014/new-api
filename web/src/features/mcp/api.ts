@@ -19,7 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import { api, type ApiRequestConfig } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
-import type { MCPServer, MCPRole } from './types'
+import type {
+  MCPServer,
+  MCPRole,
+  MCPInspectMode,
+  MCPInspectResult,
+} from './types'
 
 const mutationConfig: ApiRequestConfig = {
   skipBusinessError: true,
@@ -146,4 +151,17 @@ export async function authorizeMCPRoleTokens(id: number, tokenIds: number[]) {
     message: string
   }>(`/api/mcp/roles/${id}/tokens`, { token_ids: tokenIds }, mutationConfig)
   return requireServerSuccess(response.data)
+}
+
+export async function inspectMCPServer(
+  id: number,
+  mode: MCPInspectMode,
+  signal: AbortSignal
+) {
+  const response = await api.post<{
+    success: boolean
+    message?: string
+    data: MCPInspectResult
+  }>(`/api/mcp/servers/${id}/inspect`, { mode }, { ...mutationConfig, signal })
+  return requireServerSuccess(response.data).data
 }

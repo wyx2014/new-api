@@ -197,6 +197,11 @@ export function MCPServerDialog({
       )}
       contentClassName='max-w-lg'
     >
+      <p className='text-muted-foreground text-sm'>
+        {t(
+          'Checks use saved configuration. Save new or edited configuration before checking.'
+        )}
+      </p>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-4'>
           <FormField

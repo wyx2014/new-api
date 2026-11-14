@@ -52,3 +52,26 @@ export interface MCPAvailableItem {
   protocol_type: 'sse' | 'streamableHttp'
   quota_per_call: number
 }
+
+export type MCPInspectMode = 'connection' | 'tools'
+
+export interface MCPInspectResult {
+  connected: boolean
+  tools_status:
+    | 'not_requested'
+    | 'unsupported'
+    | 'complete'
+    | 'failed'
+    | 'partial'
+  checked_at: string
+  duration_ms: number
+  protocol_version: string
+  stage: 'connection' | 'initialize' | 'tools' | 'complete'
+  error?: { message: string; http_status?: number; rpc_code?: number }
+  tools: {
+    name: string
+    description?: string
+    inputSchema: Record<string, unknown>
+  }[]
+  complete: boolean
+}
