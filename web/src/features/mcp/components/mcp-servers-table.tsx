@@ -48,13 +48,18 @@ import { formatNumber } from '@/lib/format'
 import { handleServerError } from '@/lib/handle-server-error'
 
 import { deleteMCPServer, listMCPServers } from '../api'
-import type { MCPServer } from '../types'
+import type { MCPServer, MCPInspectMode } from '../types'
+import { MCPInspectDialog } from './mcp-inspect-dialog'
 import { MCPServerDialog } from './mcp-server-dialog'
 
 export function MCPServersTable() {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const [editingServer, setEditingServer] = useState<MCPServer | null>(null)
+  const [inspection, setInspection] = useState<{
+    server: MCPServer
+    mode: MCPInspectMode
+  } | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null)
 
@@ -185,6 +190,9 @@ export function MCPServersTable() {
                       <DropdownMenuTrigger
                         render={
                           <Button
+                            aria-label={t('Actions for {{name}}', {
+                              name: server.display_name,
+                            })}
                             variant='ghost'
                             size='icon'
                             className='size-8'
@@ -194,6 +202,20 @@ export function MCPServersTable() {
                         }
                       />
                       <DropdownMenuContent align='end'>
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setInspection({ server, mode: 'connection' })
+                          }
+                        >
+                          {t('Test connection')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() =>
+                            setInspection({ server, mode: 'tools' })
+                          }
+                        >
+                          {t('View tools')}
+                        </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => {
                             setEditingServer(server)
@@ -220,6 +242,13 @@ export function MCPServersTable() {
         </Table>
       </div>
 
+      <MCPInspectDialog
+        server={inspection?.server ?? null}
+        mode={inspection?.mode ?? 'connection'}
+        onOpenChange={(open) => {
+          if (!open) setInspection(null)
+        }}
+      />
       <MCPServerDialog
         open={dialogOpen}
         onOpenChange={(open) => {
