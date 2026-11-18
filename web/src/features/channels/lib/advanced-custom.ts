@@ -86,6 +86,11 @@ export const ADVANCED_CUSTOM_CONVERTER_OPTIONS: Array<{
     label: 'OpenAI Chat to Gemini Generate Content',
     triggerLabel: 'To Gemini Generate Content',
   },
+  {
+    value: 'jina_rerank_to_sglang',
+    label: 'Jina Rerank to SGLang',
+    triggerLabel: 'To SGLang Rerank',
+  },
 ]
 
 export type AdvancedCustomAuthMode = 'default' | AdvancedCustomAuthType
@@ -956,6 +961,9 @@ function isConverterPathAllowed(
   }
   if (converter === 'openai_responses_to_gemini_generate_content') {
     return incomingPath === '/v1/responses'
+  }
+  if (converter === 'jina_rerank_to_sglang') {
+    return incomingPath === '/v1/rerank' || incomingPath === '/rerank'
   }
   return (
     incomingPath.includes(':generateContent') ||
