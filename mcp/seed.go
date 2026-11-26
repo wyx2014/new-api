@@ -129,6 +129,7 @@ func SeedBuiltinPresets() error {
 		}
 	}
 
+	// Existing role memberships are administrator settings and survive startup.
 	// 1. 初始化默认金融投研工具包
 	financeServers := []string{
 		"juyuan", "caihui_mcp", "hexin-ifind-ds-stock-mcp", "hexin-ifind-ds-fund-mcp",
@@ -147,8 +148,6 @@ func SeedBuiltinPresets() error {
 			MCPServers:  financeJSON,
 			IsDefault:   true,
 		}).Error
-	} else if financeRole.MCPServers != financeJSON {
-		_ = model.DB.Model(&financeRole).Update("mcp_servers", financeJSON).Error
 	}
 
 	// 2. 初始化默认联网搜索工具包
@@ -165,8 +164,6 @@ func SeedBuiltinPresets() error {
 			MCPServers:  searchJSON,
 			IsDefault:   true,
 		}).Error
-	} else if searchRole.MCPServers != searchJSON {
-		_ = model.DB.Model(&searchRole).Update("mcp_servers", searchJSON).Error
 	}
 
 	return nil

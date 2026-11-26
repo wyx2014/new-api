@@ -10,13 +10,21 @@ import (
 
 // GetAuthorizedMCPServersForToken 计算给定令牌最终拥有的所有可用 MCPServer 映射
 func GetAuthorizedMCPServersForToken(token *model.Token) (map[string]*MCPServer, error) {
-	if token == nil {
-		return nil, fmt.Errorf("token is nil")
+	if token == nil || token.Id <= 0 {
+		return nil, fmt.Errorf("missing token identity")
 	}
 
-	// 获取该 Token 显式关联的 MCP 角色代码列表（严格遵循显式授权原则，未配置则无任何工具权限）
-	tokenRoles, err := token.GetMCPRoles()
-	if err != nil || len(tokenRoles) == 0 {
+	// TokenAuth may supply a Redis snapshot. Read the current authorization from the database
+	// so grants and revocations take effect on both catalog and proxy requests.
+	var current model.Token
+	if err := model.DB.Select("id", "mcp_roles").First(&current, token.Id).Error; err != nil {
+		return nil, err
+	}
+	tokenRoles, err := current.GetMCPRoles()
+	if err != nil {
+		return nil, err
+	}
+	if len(tokenRoles) == 0 {
 		return map[string]*MCPServer{}, nil
 	}
 

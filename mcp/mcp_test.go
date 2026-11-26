@@ -454,15 +454,97 @@ func TestPermissionCheckAndResolution(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, devServers, "internal_kb", "未显式关联公共角色时不自动继承默认工具")
 	assert.Contains(t, devServers, "sql_tool", "显式关联 dev 角色后拥有对应的研发工具")
+	// Authentication can come from a Redis snapshot that omits or predates the MCP role.
+	cachedToken := *devToken
+	cachedToken.MCPRoles = ""
 	engine := gin.New()
-	engine.GET("/catalog", func(c *gin.Context) { c.Set("token", devToken); GetMyMCPServers(c) })
+	engine.Use(func(c *gin.Context) { c.Set("token", &cachedToken) })
+	engine.GET("/catalog", GetMyMCPServers)
+	engine.POST("/mcp/:name", MCPPermissionCheck(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	rec := httptest.NewRecorder()
 	engine.ServeHTTP(rec, httptest.NewRequest("GET", "/catalog", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `"proxy_url":"/modelgw/mcp/sql_tool"`)
 	assert.Contains(t, rec.Body.String(), `"protocol_type":"sse"`)
 	assert.NotContains(t, rec.Body.String(), "base_url")
 	assert.NotContains(t, rec.Body.String(), "headers")
 
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, httptest.NewRequest("POST", "/mcp/sql_tool", nil))
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	cachedToken.MCPRoles = devToken.MCPRoles
+	require.NoError(t, model.DB.Model(devToken).Update("mcp_roles", "[]").Error)
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, httptest.NewRequest("GET", "/catalog", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"data":[]`)
+	rec = httptest.NewRecorder()
+	engine.ServeHTTP(rec, httptest.NewRequest("POST", "/mcp/sql_tool", nil))
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestSeedPreservesAdministratorToolkits(t *testing.T) {
+	setupTestMCPDB(t)
+	require.NoError(t, SeedBuiltinPresets())
+	for name, replacement := range map[string]string{
+		"finance_suite": `["juyuan_api"]`,
+		"search_suite":  "[]",
+	} {
+		role, err := GetMCPRoleByName(name)
+		require.NoError(t, err)
+		role.MCPServers = replacement
+		require.NoError(t, role.Update())
+	}
+	require.NoError(t, SeedBuiltinPresets())
+	financeRole, err := GetMCPRoleByName("finance_suite")
+	require.NoError(t, err)
+	assert.Equal(t, `["juyuan_api"]`, financeRole.MCPServers)
+	searchRole, err := GetMCPRoleByName("search_suite")
+	require.NoError(t, err)
+	assert.Equal(t, "[]", searchRole.MCPServers)
+}
+
+func TestJuyuanDirectConfigRequiresCurrentRoleAndExpectedTransport(t *testing.T) {
+	setupTestMCPDB(t)
+	upstream := &MCPServer{
+		Name: "juyuan_api", DisplayName: "Juyuan API", Status: MCPServerStatusEnabled,
+		ProtocolType: MCPProtocolStreamableHTTP,
+		BaseURL:      "https://api.gildata.com/mcp-servers/aidata-assistant-srv-api?token=fixture-upstream-secret",
+		Headers:      `{"Authorization":"Bearer fixture-hidden-header"}`,
+	}
+	require.NoError(t, upstream.Insert())
+	role := &MCPRole{Name: "research", DisplayName: "Research"}
+	require.NoError(t, role.SetMCPServers([]string{upstream.Name}))
+	require.NoError(t, role.Insert())
+	token := &model.Token{UserId: 1, Key: "fixture-desktop-key", Name: "desktop"}
+	require.NoError(t, token.SetMCPRoles([]string{role.Name}))
+	require.NoError(t, token.Insert())
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) { c.Set("token", token) })
+	engine.GET("/my-servers", GetMyMCPServers)
+	engine.GET("/my-servers/:name/direct-config", MCPPermissionCheck(), GetMCPDirectConfig)
+	request := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	path := "/my-servers/juyuan_api/direct-config"
+	public := request("/my-servers")
+	require.Equal(t, http.StatusOK, public.Code)
+	assert.NotContains(t, public.Body.String(), "fixture-upstream-secret")
+	config := request(path)
+	require.Equal(t, http.StatusOK, config.Code)
+	assert.Equal(t, "private, no-store", config.Header().Get("Cache-Control"))
+	assert.JSONEq(t, `{"success":true,"data":{"name":"juyuan_api","display_name":"Juyuan API","protocol_type":"streamableHttp","endpoint":"https://api.gildata.com/mcp-servers/aidata-assistant-srv-api","token":"fixture-upstream-secret"}}`, config.Body.String())
+
+	require.NoError(t, model.DB.Model(upstream).Update("base_url", "https://other.example/mcp?token=fixture-other-secret").Error)
+	invalid := request(path)
+	require.Equal(t, http.StatusNotFound, invalid.Code)
+	assert.NotContains(t, invalid.Body.String(), "fixture-other-secret")
+	require.NoError(t, model.DB.Model(token).Update("mcp_roles", "[]").Error)
+	assert.Equal(t, http.StatusForbidden, request(path).Code)
 }
 
 func TestMCPTransparentReverseProxy(t *testing.T) {

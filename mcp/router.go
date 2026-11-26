@@ -25,6 +25,7 @@ func RegisterRoutes(router *gin.Engine) {
 	{
 		// 客户端自查已授权的 MCP 列表（供 TPCowork / SkillHub 动态拉取）
 		apiGroup.GET("/my-servers", middleware.TokenAuth(), GetMyMCPServers)
+		apiGroup.GET("/my-servers/:name/direct-config", middleware.TokenAuth(), MCPPermissionCheck(), GetMCPDirectConfig)
 
 		// 管理员后台 CRUD 接口
 		adminGroup := apiGroup.Group("")

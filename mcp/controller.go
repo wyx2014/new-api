@@ -1,10 +1,11 @@
 package mcp
 
 import (
-	"github.com/QuantumNous/new-api/common"
 	"net/http"
+	"net/url"
 	"strconv"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 )
@@ -90,6 +91,38 @@ func GetMyMCPServers(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data":    items,
+	})
+}
+
+// GetMCPDirectConfig gives authorized desktop Hosts the configuration for direct Juyuan connections.
+func GetMCPDirectConfig(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	value, _ := c.Get("mcp_server")
+	server, ok := value.(*MCPServer)
+	if !ok || server == nil || (server.Name != "juyuan_api" && server.Name != "juyuan") || server.ProtocolType != MCPProtocolStreamableHTTP {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	upstream, err := url.Parse(server.BaseURL)
+	if err != nil || upstream.Scheme != "https" || upstream.Host != "api.gildata.com" ||
+		upstream.EscapedPath() != "/mcp-servers/aidata-assistant-srv-api" || upstream.User != nil || upstream.Fragment != "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	query, err := url.ParseQuery(upstream.RawQuery)
+	tokens := query["token"]
+	if err != nil || len(query) != 1 || len(tokens) != 1 || tokens[0] == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	upstream.RawQuery = ""
+	upstream.ForceQuery = false
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"name": server.Name, "display_name": server.DisplayName, "protocol_type": server.ProtocolType,
+			"endpoint": upstream.String(), "token": tokens[0],
+		},
 	})
 }
 
